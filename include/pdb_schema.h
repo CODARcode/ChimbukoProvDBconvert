@@ -2,6 +2,7 @@
 #include "ddb_wrapper.h"
 #include <nlohmann/json.hpp>
 #include <unordered_set>
+#include <tuple>
 
 class AnomaliesTable{
   duckdb_connection &con;
@@ -185,6 +186,60 @@ public:
 };
 
 
+class IOstepTable{
+  Table io_steps;
+
+  typedef std::tuple<int,int,int> keyType;
+  
+  struct keyHash{ 
+    size_t operator()(const keyType &x) const{ 
+      return std::get<0>(x) ^ std::get<1>(x) ^ std::get<2>(x); 
+    }
+  };
+  
+  std::unordered_set<keyType, keyHash> io_steps_keys; //ensure each io step only appears once in the table
+  
+  duckdb_connection &con;
+
+#define IO_STEPS_ENTRIES \
+      DOIT(int, io_step); \
+      DOIT(int, pid); \
+      DOIT(int, rid); \
+      DOIT(uint64_t,io_step_tstart); \
+      DOIT(uint64_t,io_step_tend); 
+
+public:
+  IOstepTable(duckdb_connection &con): io_steps("io_steps"), con(con){
+#define DOIT(T,NM) io_steps.addColumn<T>(#NM)
+    IO_STEPS_ENTRIES;
+#undef DOIT
+   
+    io_steps.define(con);
+  }
+  
+  void import(const nlohmann::json &rec){
+    int step = rec["io_step"];
+    int pid = rec["pid"];
+    int rid = rec["rid"];
+    
+    auto ck = io_steps_keys.insert(std::make_tuple(pid,rid,step));
+    if(ck.second){
+      int r = io_steps.addRow();
+#define DOIT(T,NM){ T v = rec[#NM];  io_steps(r,#NM) = v; }
+      IO_STEPS_ENTRIES;
+#undef DOIT
+    }
+  }
+
+  void write(){
+    io_steps.write(con);
+  }
+  void clear(){
+    io_steps.clear();
+  }
+};
+
+
 
 
 
@@ -195,24 +250,28 @@ struct provDBtables{
   AnomaliesTable anomalies;
   CallStackTables call_stack;
   ExecWindowTables exec_window;
+  IOstepTable io_steps;
   
-  provDBtables(duckdb_connection &con): anomalies(con), call_stack(con), exec_window(con){  }
+  provDBtables(duckdb_connection &con): anomalies(con), call_stack(con), exec_window(con), io_steps(con){  }
 
   void import(const nlohmann::json &rec){
     anomalies.import(rec);
     call_stack.import(rec);
     exec_window.import(rec);
+    io_steps.import(rec);
   }
   
   void write(){
     anomalies.write();
     call_stack.write();
     exec_window.write();
+    io_steps.write();
   }
   void clear(){
     anomalies.clear();
     call_stack.clear();
     exec_window.clear();
+    io_steps.clear();
   }
   
 };

@@ -1,9 +1,43 @@
 #include <ddb_wrapper.h>
 #include <pdb_schema.h>
+#include <pdb_global_schema.h>
+
 #include <sonata/Admin.hpp>
 #include <sonata/Provider.hpp>
 #include <sonata/Client.hpp>
 #include <sstream>
+
+template<typename Into>
+void parseCollection(Into &into, sonata::Database &db, const std::string &col_name, int nrecord_max = -1){
+  int r=0;
+   
+  sonata::Collection col = db.open(col_name);
+  size_t size;
+  try{
+    size = col.size();
+  }catch(const sonata::Exception &e){
+    return; //calling size on an empty collection appears to throw an error; perhaps this quantity is only populated once at least one write takes place?
+  }
+    
+  if(size == 0) return; //just in case!
+   
+  uint64_t last_idx = col.last_record_id();
+  for(uint64_t idx = 0; idx < last_idx; idx++){    
+    nlohmann::json rec;
+    bool exists = true;
+    try{    
+      col.fetch(idx, &rec);
+    }catch(const sonata::Exception &e){
+      exists = false;
+    }
+    if(exists){
+      into.import(rec);
+      ++r;
+      if(nrecord_max > 0 && r >= nrecord_max) return;
+    }
+  }
+}
+
 
 void test(){
   std::string pdb_dir = "/home/idies/workspace/Storage/ckelly/persistent/Chimbuko/IMPACTS/test/test_global_QU240/with_select/run_chimbuko_offline/chimbuko/provdb";
@@ -39,8 +73,17 @@ void test(){
     std::cout << "Attaching database " << db_shard_names[s] << std::endl;
     databases[s].reset(new sonata::Database(client.open(addr, 0, db_shard_names[s])));
   }
-
-  
+  std::unique_ptr<sonata::Database> glob_db;
+  {
+    std::string config;
+    {
+      std::stringstream ss; ss << "{ \"path\" : \"" << pdb_dir << "/provdb.global.unqlite\" }";
+      config = ss.str();
+    }   
+    admin.attachDatabase(addr,0, "provdb.global", "unqlite", config);
+    glob_db.reset(new sonata::Database(client.open(addr, 0, "provdb.global")));
+  }
+    
   //Setup DuckDB
   duckdb_database db;
   duckdb_connection con;
@@ -51,34 +94,19 @@ void test(){
   provDBtables tables(con);
   
   //parse "anomalies"
-  int r=0;
   for(int s=0;s<nshards;s++){
-    if(nrecord_max > 0 && r >= nrecord_max) break;
-    
-    sonata::Collection col = databases[s]->open("anomalies");
-    if(col.size() == 0) continue;
-   
-    uint64_t last_idx = col.last_record_id();
-    for(uint64_t idx = 0; idx < last_idx; idx++){    
-      nlohmann::json rec;
-      bool exists = true;
-      try{    
-	col.fetch(idx, &rec);
-      }catch(const sonata::Exception &e){
-	exists = false;
-      }
-      if(exists){
-	std::cout << "Found record " << idx << std::endl;
-      }
-
-      std::cout << rec.dump(4) << std::endl;
-      tables.import(rec);
-      ++r;
-      if(nrecord_max > 0 && r >= nrecord_max) break;
-    }
+    std::cout << "Parsing anomalies from shard " << s << std::endl;
+    parseCollection(tables, *databases[s], "anomalies", nrecord_max);
   }
+    
+  //parse the global database
+  provDBglobalFuncStatsTables glob_tables(con);
+  std::cout << "Parsing func_stats from global database" << std::endl;
+  parseCollection(glob_tables, *glob_db, "func_stats", nrecord_max);
+  
 
   tables.write();
+  glob_tables.write();
   duckdb_disconnect(&con);
   duckdb_close(&db);
 }
