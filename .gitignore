@@ -1,0 +1,7 @@
+*~
+configure
+*.in
+*.bak
+config.guess
+config.sub
+
