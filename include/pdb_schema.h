@@ -19,7 +19,8 @@ class AnomaliesTable{
     DOIT2(int,io_step_index, io_step); \
     DOIT(uint64_t,runtime_exclusive); \
     DOIT(double,outlier_score); \
-    DOIT(double,outlier_severity);   
+    DOIT(double,outlier_severity); \
+    DOIT(bool, is_gpu_event); 
   
 public:
   AnomaliesTable(duckdb_connection &con): tab("anomalies"), con(con){
@@ -240,6 +241,86 @@ public:
 };
 
 
+class GPUanomaliesTable{
+  duckdb_connection &con;
+  Table gpu_parents;
+  Table gpu_anomalies;
+
+  std::unordered_set<std::string> gpu_parents_keys;
+
+#define GPU_PARENTS_ENTRIES \
+  DOIT(std::string, event_id); \
+  DOIT(int, tid);
+
+  //TODO: call stacks for parents
+  
+  
+#define GPU_ANOMALIES_ENTRIES \
+    DOIT(std::string, event_id); \
+    DOIT_LOC(int, context); \
+    DOIT_LOC(int, device); \
+    DOIT_LOC(int, stream); \
+    DOIT_SPECIAL(std::string, gpu_parent_event_id);
+    
+public:
+  GPUanomaliesTable(duckdb_connection &con): gpu_anomalies("gpu_anomalies"), gpu_parents("gpu_parents"), con(con){
+#define DOIT(T,NM) tab.addColumn<T>(#NM)
+#define DOIT_SPECIAL(T,NM) DOIT(T,NM)
+#define DOIT_LOC(T,NM) DOIT(T,NM)
+    {
+      auto &tab = gpu_parents;
+      GPU_PARENTS_ENTRIES;
+    }
+    {
+      auto &tab = gpu_anomalies;
+      GPU_ANOMALIES_ENTRIES;
+    }
+#undef DOIT
+#undef DOIT_SPECIAL
+#undef DOIT_LOC
+    
+    gpu_parents.define(con);
+    gpu_anomalies.define(con);
+  }
+    
+  void import(const nlohmann::json &rec){
+    if(rec["is_gpu_event"].template get<bool>()){
+      const nlohmann::json &gpu_loc = rec["gpu_location"];	
+      int r = gpu_anomalies.addRow();
+#define DOIT(T,NM){ T v = rec[#NM];  gpu_anomalies(r,#NM) = v; }
+#define DOIT_LOC(T,NM){ T v = gpu_loc[#NM]; gpu_anomalies(r,#NM) = v; }
+#define DOIT_SPECIAL(T,NM)
+	GPU_ANOMALIES_ENTRIES;
+#undef DOIT
+#undef DOIT_LOC
+#undef DOIT_SPECIAL
+      
+      if(!rec["gpu_parent"].is_string()){ //if string it is an error, perhaps due to missing correlation ID
+	const nlohmann::json &parent_info = rec["gpu_parent"];
+	
+	gpu_anomalies(r,"gpu_parent_event_id") = parent_info["event_id"].template get<std::string>();
+	auto ck = gpu_parents_keys.insert(parent_info["event_id"]);
+	if(ck.second){
+	  int s = gpu_parents.addRow();
+#define DOIT(T,NM){ T v = parent_info[#NM];  gpu_parents(s,#NM) = v; }
+	  GPU_PARENTS_ENTRIES;
+#undef DOIT
+	}
+      }else{
+	gpu_anomalies(r,"gpu_parent_event_id") = rec["gpu_parent"].template get<std::string>(); //store whatever the error string was
+      }
+    }   
+  }
+
+  void write(){
+    gpu_parents.write(con);
+    gpu_anomalies.write(con);
+  }
+  void clear(){
+    gpu_parents.clear();
+    gpu_anomalies.clear();
+  }
+};
 
 
 
@@ -247,33 +328,48 @@ public:
 
 
 struct provDBtables{
-  AnomaliesTable anomalies;
-  CallStackTables call_stack;
-  ExecWindowTables exec_window;
-  IOstepTable io_steps;
-  
-  provDBtables(duckdb_connection &con): anomalies(con), call_stack(con), exec_window(con), io_steps(con){  }
+#define TABLES	 \
+  DOIT(AnomaliesTable, anomalies) \
+  DOIT(CallStackTables, call_stack) \
+  DOIT(ExecWindowTables, exec_window) \
+  DOIT(IOstepTable, io_steps) \
+  LAST(GPUanomaliesTable, gpu_anomalies)
 
+#define DOIT(T,NM) T NM;
+#define LAST(T,NM) DOIT(T, NM)
+  TABLES
+#undef DOIT
+#undef LAST  
+
+#define DOIT(T, NM) NM(con),
+#define LAST(T, NM) NM(con)  
+  provDBtables(duckdb_connection &con): TABLES{  }
+#undef DOIT
+#undef LAST
+					
   void import(const nlohmann::json &rec){
-    anomalies.import(rec);
-    call_stack.import(rec);
-    exec_window.import(rec);
-    io_steps.import(rec);
+#define DOIT(T,NM) NM.import(rec);
+#define LAST(T,NM) DOIT(T, NM)
+    TABLES
+#undef DOIT
+#undef LAST  
   }
   
   void write(){
-    anomalies.write();
-    call_stack.write();
-    exec_window.write();
-    io_steps.write();
+#define DOIT(T,NM) NM.write();
+#define LAST(T,NM) DOIT(T, NM)
+    TABLES
+#undef DOIT
+#undef LAST  
   }
   void clear(){
-    anomalies.clear();
-    call_stack.clear();
-    exec_window.clear();
-    io_steps.clear();
+#define DOIT(T,NM) NM.clear();
+#define LAST(T,NM) DOIT(T, NM)
+    TABLES
+#undef DOIT
+#undef LAST  
   }
-  
+#undef TABLES
 };
 
 

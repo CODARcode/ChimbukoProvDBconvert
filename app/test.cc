@@ -6,6 +6,34 @@
 #include <sonata/Provider.hpp>
 #include <sonata/Client.hpp>
 #include <sstream>
+#include <set>
+
+template<typename Into>
+void parseSpecificRecords(Into &into, sonata::Database &db, const std::string &col_name, const std::set<uint64_t> &recidxs){
+  sonata::Collection col = db.open(col_name);
+  size_t size;
+  try{
+    size = col.size();
+  }catch(const sonata::Exception &e){
+    return; //calling size on an empty collection appears to throw an error; perhaps this quantity is only populated once at least one write takes place?
+  }
+    
+  if(size == 0) return; //just in case!
+
+  for(uint64_t idx: recidxs){
+    nlohmann::json rec;
+    bool exists = true;
+    try{    
+      col.fetch(idx, &rec);
+    }catch(const sonata::Exception &e){
+      exists = false;
+    }
+    if(exists){
+      into.import(rec);
+    }
+  }
+}
+
 
 template<typename Into>
 void parseCollection(Into &into, sonata::Database &db, const std::string &col_name, int nrecord_max = -1){
@@ -44,7 +72,8 @@ void test(){
   std::string out_file = "provdb.ddb";
   int nshards = 4;
   int nrecord_max =5; //cap on how many records to import. -1=unlimited
-  
+  std::set<uint64_t> recs = { 22710 };
+    
   //Setup sonata
   thallium::engine engine("na+sm", THALLIUM_SERVER_MODE);
 
@@ -94,11 +123,13 @@ void test(){
   provDBtables tables(con);
   
   //parse "anomalies"
-  for(int s=0;s<nshards;s++){
-    std::cout << "Parsing anomalies from shard " << s << std::endl;
-    parseCollection(tables, *databases[s], "anomalies", nrecord_max);
-  }
-    
+  // for(int s=0;s<nshards;s++){
+  //   std::cout << "Parsing anomalies from shard " << s << std::endl;
+  //   parseCollection(tables, *databases[s], "anomalies", nrecord_max);
+  // }
+  std::cout << "Parsing anomalies from shard 0" << std::endl;
+  parseSpecificRecords(tables, *databases[0], "anomalies", recs);
+  
   //parse the global database
   provDBglobalFuncStatsTables glob_tables(con);
   std::cout << "Parsing func_stats from global database" << std::endl;

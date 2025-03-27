@@ -170,5 +170,6 @@ struct provDBglobalFuncStatsTables{
 #undef DOIT
 #undef LAST  
   }
-  
+
+#undef TABLES
 };
