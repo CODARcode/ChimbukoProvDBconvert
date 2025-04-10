@@ -252,7 +252,8 @@ public:
   }
 
   int rows() const{ return values.size(); }
-
+  int columns() const{ return headers.size(); }
+  
   //Resize the number of rows. Added rows will be initialized according to the unpopulated ref_row
   void resizeRows(size_t to){
     values.resize(to, ref_row);
@@ -357,6 +358,16 @@ public:
     t.fromQuery("CALL pragma_database_size();",con);
     return t;
   }
+
+  const std::string &columnName(const int i) const{ return headers[i]; }
+
+  //Return the column index associated with a column name. Returns -1 if the column does not exists
+  int columnIndex(const std::string &nm) const{
+    auto it = colmap.find(nm);
+    if(it == colmap.end()) return -1;
+    else return it->second;
+  }
+    
   
 };
 std::ostream & operator<<(std::ostream &os, const Table &t){

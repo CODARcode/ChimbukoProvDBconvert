@@ -322,6 +322,46 @@ public:
   }
 };
 
+//The node state from the monitoring plugin
+class NodeStateTable{
+  duckdb_connection &con;
+  Table node_state;
+
+  //For this table the fields are dynamic so we delay setting up the table until we receive the first record
+  bool is_setup;
+public:
+  NodeStateTable(duckdb_connection &con): node_state("node_state"), con(con), is_setup(false){}
+    
+  void import(const nlohmann::json &rec){
+    const nlohmann::json &data = rec["node_state"]["data"];
+    if(!is_setup){
+      node_state.addColumn<std::string>("event_id");
+      for(int i=0;i<data.size();i++)
+	node_state.addColumn<uint64_t>('"' + data[i]["field"].template get<std::string>() + '"');
+      node_state.define(con);
+      is_setup=true;
+      std::cout << "node_state set up with " << node_state.columns()-1 << " fields" << std::endl;
+    }
+    int r = node_state.addRow();
+    node_state(r,"event_id") = rec["event_id"].template get<std::string>();
+    for(int i=0;i<data.size();i++){
+      int col = node_state.columnIndex('"' + data[i]["field"].template get<std::string>() + '"');
+      if(col == -1){
+	std::cout << "WARNING: Encountered node_state field \"" << data[i]["field"] << "\" not present in first record!" << std::endl;
+      }else{
+	node_state(r,col) = data[i]["value"].template get<uint64_t>();
+      }
+    }
+  }
+
+  void write(){
+    node_state.write(con);
+  }
+  void clear(){
+    node_state.clear();
+  }
+};
+
 
 
 
@@ -333,7 +373,8 @@ struct provDBtables{
   DOIT(CallStackTables, call_stack) \
   DOIT(ExecWindowTables, exec_window) \
   DOIT(IOstepTable, io_steps) \
-  LAST(GPUanomaliesTable, gpu_anomalies)
+  DOIT(GPUanomaliesTable, gpu_anomalies) \
+  LAST(NodeStateTable, node_state)
 
 #define DOIT(T,NM) T NM;
 #define LAST(T,NM) DOIT(T, NM)

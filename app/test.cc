@@ -67,12 +67,42 @@ void parseCollection(Into &into, sonata::Database &db, const std::string &col_na
 }
 
 
+nlohmann::json getFirst(sonata::Database &db, const std::string &col_name){
+  sonata::Collection col = db.open(col_name);
+  size_t size;
+  try{
+    size = col.size();
+  }catch(const sonata::Exception &e){
+    return nlohmann::json::object(); //calling size on an empty collection appears to throw an error; perhaps this quantity is only populated once at least one write takes place?
+  }
+    
+  if(size == 0) return nlohmann::json::object(); //just in case!
+   
+  uint64_t last_idx = col.last_record_id();
+  for(uint64_t idx = 0; idx < last_idx; idx++){    
+    nlohmann::json rec;
+    bool exists = true;
+    try{    
+      col.fetch(idx, &rec);
+    }catch(const sonata::Exception &e){
+      exists = false;
+    }
+    if(exists){
+      return rec;
+    }
+  }
+  return nlohmann::json::object();
+}
+
+
+
+
 void test(){
-  std::string pdb_dir = "/home/idies/workspace/Storage/ckelly/persistent/Chimbuko/IMPACTS/test/test_global_QU240/with_select/run_chimbuko_offline/chimbuko/provdb";
+  std::string pdb_dir = "/home/idies/workspace/Storage/ckelly/persistent/Chimbuko/IMPACTS/test/test_global_QU240/with_select_and_monitoring/run_chimbuko_offline/chimbuko/provdb";
   std::string out_file = "provdb.ddb";
   int nshards = 4;
   int nrecord_max =5; //cap on how many records to import. -1=unlimited
-  std::set<uint64_t> recs = { 22710 };
+  std::set<uint64_t> recs = { 14377 };
     
   //Setup sonata
   thallium::engine engine("na+sm", THALLIUM_SERVER_MODE);
@@ -112,7 +142,7 @@ void test(){
     admin.attachDatabase(addr,0, "provdb.global", "unqlite", config);
     glob_db.reset(new sonata::Database(client.open(addr, 0, "provdb.global")));
   }
-    
+
   //Setup DuckDB
   duckdb_database db;
   duckdb_connection con;
