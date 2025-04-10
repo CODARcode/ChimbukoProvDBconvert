@@ -336,14 +336,16 @@ public:
     const nlohmann::json &data = rec["node_state"]["data"];
     if(!is_setup){
       node_state.addColumn<std::string>("event_id");
+      node_state.addColumn<uint64_t>("timestamp");
       for(int i=0;i<data.size();i++)
 	node_state.addColumn<uint64_t>('"' + data[i]["field"].template get<std::string>() + '"');
       node_state.define(con);
       is_setup=true;
-      std::cout << "node_state set up with " << node_state.columns()-1 << " fields" << std::endl;
+      std::cout << "node_state set up with " << node_state.columns()-2 << " fields" << std::endl;
     }
     int r = node_state.addRow();
     node_state(r,"event_id") = rec["event_id"].template get<std::string>();
+    node_state(r,"timestamp") = rec["node_state"]["timestamp"].template get<uint64_t>();
     for(int i=0;i<data.size();i++){
       int col = node_state.columnIndex('"' + data[i]["field"].template get<std::string>() + '"');
       if(col == -1){
