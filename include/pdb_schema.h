@@ -248,12 +248,11 @@ class GPUanomaliesTable{
 
   std::unordered_set<std::string> gpu_parents_keys;
 
+  CallStackTables* call_stacks; //link the call stacks table to add GPU parent call stacks
+
 #define GPU_PARENTS_ENTRIES \
   DOIT(std::string, event_id); \
   DOIT(int, tid);
-
-  //TODO: call stacks for parents
-  
   
 #define GPU_ANOMALIES_ENTRIES \
     DOIT(std::string, event_id); \
@@ -263,7 +262,7 @@ class GPUanomaliesTable{
     DOIT_SPECIAL(std::string, gpu_parent_event_id);
     
 public:
-  GPUanomaliesTable(duckdb_connection &con): gpu_anomalies("gpu_anomalies"), gpu_parents("gpu_parents"), con(con){
+  GPUanomaliesTable(duckdb_connection &con): gpu_anomalies("gpu_anomalies"), gpu_parents("gpu_parents"), con(con), call_stacks(nullptr){
 #define DOIT(T,NM) tab.addColumn<T>(#NM)
 #define DOIT_SPECIAL(T,NM) DOIT(T,NM)
 #define DOIT_LOC(T,NM) DOIT(T,NM)
@@ -282,6 +281,10 @@ public:
     gpu_parents.define(con);
     gpu_anomalies.define(con);
   }
+
+  void linkCallStacksTable(CallStackTables* call_stacks_){
+    call_stacks = call_stacks_;
+  }
     
   void import(const nlohmann::json &rec){
     if(rec["is_gpu_event"].template get<bool>()){
@@ -299,12 +302,17 @@ public:
 	const nlohmann::json &parent_info = rec["gpu_parent"];
 	
 	gpu_anomalies(r,"gpu_parent_event_id") = parent_info["event_id"].template get<std::string>();
+
+	//Only add a gpu_parent to the table if it has not been seen before
 	auto ck = gpu_parents_keys.insert(parent_info["event_id"]);
 	if(ck.second){
 	  int s = gpu_parents.addRow();
 #define DOIT(T,NM){ T v = parent_info[#NM];  gpu_parents(s,#NM) = v; }
 	  GPU_PARENTS_ENTRIES;
 #undef DOIT
+	  
+	  if(call_stacks == nullptr) throw std::runtime_error("Expect call stacks table to be linked");
+	  call_stacks->import(parent_info);
 	}
       }else{
 	gpu_anomalies(r,"gpu_parent_event_id") = rec["gpu_parent"].template get<std::string>(); //store whatever the error string was
@@ -386,7 +394,9 @@ struct provDBtables{
 
 #define DOIT(T, NM) NM(con),
 #define LAST(T, NM) NM(con)  
-  provDBtables(duckdb_connection &con): TABLES{  }
+  provDBtables(duckdb_connection &con): TABLES{
+      gpu_anomalies.linkCallStacksTable(&call_stack);
+  }
 #undef DOIT
 #undef LAST
 					
