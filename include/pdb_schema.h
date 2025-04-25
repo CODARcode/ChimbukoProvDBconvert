@@ -3,6 +3,31 @@
 #include <nlohmann/json.hpp>
 #include <unordered_set>
 #include <tuple>
+#include <sstream>
+
+//The event IDs have the form “$RANK:$IO_STEP:$IDX” (eg “0:12:225”) which are unique only within a given process. To support multiple processes we augment the index to
+//$PID:$RANK:$IO_STEP:$IDX
+inline std::string getUniqueID(const std::string &process_event_id, int pid){
+  std::stringstream ss; ss << pid << ":" << process_event_id;
+  return ss.str();
+}
+
+const std::unordered_set<std::string> & defaultEventIDnames(){
+  static std::unordered_set<std::string> s({ "event_id" });
+  return s;
+}
+
+//Augment event_ids without too much extra work
+template<typename T>
+inline T process(const nlohmann::json &rec, const std::string &entry, int pid, const std::unordered_set<std::string> &event_id_nm = defaultEventIDnames()){
+  return rec[entry].template get<T>();
+}
+template<>
+inline std::string process<std::string>(const nlohmann::json &rec, const std::string &entry, int pid, const std::unordered_set<std::string> &event_id_nm){
+  std::string ret = rec[entry].template get<std::string>();
+  if(event_id_nm.count(entry)) ret = getUniqueID(ret,pid);
+  return ret;
+}
 
 class AnomaliesTable{
   duckdb_connection &con;
@@ -25,17 +50,19 @@ class AnomaliesTable{
 public:
   AnomaliesTable(duckdb_connection &con): tab("anomalies"), con(con){
 #define DOIT(T,NM) tab.addColumn<T>(#NM)
-#define DOIT2(T,NM,NM2) tab.addColumn<T>(#NM)
+#define DOIT2(T,NM,NM2) DOIT(T,NM)   
     ENTRIES;
 #undef DOIT
 #undef DOIT2
+    
     tab.define(con);
   }
     
   void import(const nlohmann::json &rec){
     int r = tab.addRow();
-#define DOIT(T,NM){ T v = rec[#NM];  tab(r,#NM) = v; }
-#define DOIT2(T,NM,NM2){ T v = rec[#NM2];  tab(r,#NM) = v; }
+    int pid = rec["pid"].template get<int>();
+#define DOIT(T,NM) tab(r,#NM) = process<T>(rec,#NM,pid); 
+#define DOIT2(T,NM,NM2) tab(r,#NM) = rec[#NM2].template get<T>();
     ENTRIES;
 #undef DOIT
 #undef DOIT2
@@ -81,13 +108,16 @@ public:
     call_stack_events.define(con);
   }
   
-
-  void import(const nlohmann::json &rec){
+  //If pid = -1 infer from the record
+  void import(const nlohmann::json &rec, int pid = -1){
     auto const &cs = rec["call_stack"];
-    std::string event_id = rec["event_id"];
+    if(pid == -1)
+      pid = rec["pid"].template get<int>();
+    
+    std::string event_id = getUniqueID(rec["event_id"],pid);
     
     for(size_t i=0;i<cs.size();i++){
-      std::string cs_eid = cs[i]["event_id"];
+      std::string cs_eid = getUniqueID(cs[i]["event_id"],pid);
 
       {
 	int r = call_stacks.addRow();
@@ -98,7 +128,7 @@ public:
       auto ck = call_stack_events_keys.insert(cs_eid);
       if(ck.second){ //key did not previously exist
 	int r = call_stack_events.addRow();
-#define DOIT(T,NM){ T v = cs[i][#NM];  call_stack_events(r,#NM) = v; }
+#define DOIT(T,NM) call_stack_events(r,#NM) = process<T>(cs[i],#NM,pid); 
 	CALL_STACK_EVENTS_ENTRIES;
 #undef DOIT
 	
@@ -153,11 +183,14 @@ public:
   }
   
   void import(const nlohmann::json &rec){
+    static std::unordered_set<std::string> eid_names({ "event_id", "parent_event_id" });
+    
     auto const &cs = rec["event_window"]["exec_window"];
-    std::string event_id = rec["event_id"];
+    int pid = rec["pid"].template get<int>();
+    std::string event_id = getUniqueID(rec["event_id"],pid);
     
     for(size_t i=0;i<cs.size();i++){
-      std::string cs_eid = cs[i]["event_id"];
+      std::string cs_eid = getUniqueID(cs[i]["event_id"],pid);
 
       {
 	int r = exec_windows.addRow();
@@ -168,7 +201,7 @@ public:
       auto ck = exec_window_events_keys.insert(cs_eid);
       if(ck.second){ //key did not previously exist
 	int r = exec_window_events.addRow();
-#define DOIT(T,NM){ T v = cs[i][#NM];  exec_window_events(r,#NM) = v; }
+#define DOIT(T,NM) exec_window_events(r,#NM) = process<T>(cs[i],#NM,pid,eid_names);
 	EXEC_WINDOW_EVENTS_ENTRIES;
 #undef DOIT
 	
@@ -226,7 +259,7 @@ public:
     auto ck = io_steps_keys.insert(std::make_tuple(pid,rid,step));
     if(ck.second){
       int r = io_steps.addRow();
-#define DOIT(T,NM){ T v = rec[#NM];  io_steps(r,#NM) = v; }
+#define DOIT(T,NM) io_steps(r,#NM) = rec[#NM].template get<T>();
       IO_STEPS_ENTRIES;
 #undef DOIT
     }
@@ -288,10 +321,12 @@ public:
     
   void import(const nlohmann::json &rec){
     if(rec["is_gpu_event"].template get<bool>()){
+      int pid = rec["pid"].template get<int>();
+      
       const nlohmann::json &gpu_loc = rec["gpu_location"];	
       int r = gpu_anomalies.addRow();
-#define DOIT(T,NM){ T v = rec[#NM];  gpu_anomalies(r,#NM) = v; }
-#define DOIT_LOC(T,NM){ T v = gpu_loc[#NM]; gpu_anomalies(r,#NM) = v; }
+#define DOIT(T,NM) gpu_anomalies(r,#NM) = process<T>(rec,#NM,pid); 
+#define DOIT_LOC(T,NM) gpu_anomalies(r,#NM) = gpu_loc[#NM].template get<T>(); 
 #define DOIT_SPECIAL(T,NM)
 	GPU_ANOMALIES_ENTRIES;
 #undef DOIT
@@ -300,19 +335,21 @@ public:
       
       if(!rec["gpu_parent"].is_string()){ //if string it is an error, perhaps due to missing correlation ID
 	const nlohmann::json &parent_info = rec["gpu_parent"];
+
+	std::string parent_eid = getUniqueID(parent_info["event_id"].template get<std::string>(), pid);
 	
-	gpu_anomalies(r,"gpu_parent_event_id") = parent_info["event_id"].template get<std::string>();
+	gpu_anomalies(r,"gpu_parent_event_id") = parent_eid;
 
 	//Only add a gpu_parent to the table if it has not been seen before
-	auto ck = gpu_parents_keys.insert(parent_info["event_id"]);
+	auto ck = gpu_parents_keys.insert(parent_eid);
 	if(ck.second){
 	  int s = gpu_parents.addRow();
-#define DOIT(T,NM){ T v = parent_info[#NM];  gpu_parents(s,#NM) = v; }
+#define DOIT(T,NM) gpu_parents(s,#NM) = process<T>(parent_info, #NM, pid);
 	  GPU_PARENTS_ENTRIES;
 #undef DOIT
 	  
 	  if(call_stacks == nullptr) throw std::runtime_error("Expect call stacks table to be linked");
-	  call_stacks->import(parent_info);
+	  call_stacks->import(parent_info, pid);
 	}
       }else{
 	gpu_anomalies(r,"gpu_parent_event_id") = rec["gpu_parent"].template get<std::string>(); //store whatever the error string was
@@ -351,8 +388,9 @@ public:
       is_setup=true;
       std::cout << "node_state set up with " << node_state.columns()-2 << " fields" << std::endl;
     }
+    int pid = rec["pid"].template get<int>();
     int r = node_state.addRow();
-    node_state(r,"event_id") = rec["event_id"].template get<std::string>();
+    node_state(r,"event_id") = getUniqueID(rec["event_id"].template get<std::string>(), pid);
     node_state(r,"timestamp") = rec["node_state"]["timestamp"].template get<uint64_t>();
     for(int i=0;i<data.size();i++){
       int col = node_state.columnIndex('"' + data[i]["field"].template get<std::string>() + '"');
