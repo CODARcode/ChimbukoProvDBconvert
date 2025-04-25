@@ -2,6 +2,7 @@
 #include "ddb_wrapper.h"
 #include <nlohmann/json.hpp>
 #include <unordered_set>
+#include <unordered_map>
 #include <tuple>
 #include <sstream>
 
@@ -28,6 +29,26 @@ inline std::string process<std::string>(const nlohmann::json &rec, const std::st
   if(event_id_nm.count(entry)) ret = getUniqueID(ret,pid);
   return ret;
 }
+
+//As counter indices are not unified over all ranks, we build our own mapping of counter name to unique index
+uint64_t lookupCounterIndex(const std::string &cname, bool *first = nullptr){
+  static std::unordered_map<std::string, uint64_t> cmap;
+  static uint64_t cidx_s = 0;
+
+  uint64_t ret;
+  auto it = cmap.find(cname);
+  if(it == cmap.end()){
+    ret = cidx_s;
+    cmap[cname] = cidx_s++;
+    if(first) *first = true;
+    
+  }else{
+    ret = it->second;
+    if(first) *first = false;
+  }
+  return ret;
+}
+  
 
 class AnomaliesTable{
   duckdb_connection &con;
@@ -411,6 +432,64 @@ public:
 };
 
 
+class CounterEventsTables{
+  Table counter_names; //counter_idx -> counter_name
+  Table counter_events; //anomaly event_id -> { counter_idx, value, timestamp }
+  
+  duckdb_connection &con;
+
+public:
+  CounterEventsTables(duckdb_connection &con): counter_names("counter_names"), counter_events("counter_events"), con(con){
+#define DOIT(T,NM) counter_names.addColumn<T>(#NM)
+    DOIT(uint64_t, counter_idx);
+    DOIT(std::string, counter_name);
+#undef DOIT
+
+#define DOIT(T,NM) counter_events.addColumn<T>(#NM)
+    DOIT(std::string, event_id);
+    DOIT(uint64_t, counter_idx);
+    DOIT(uint64_t, value);
+    DOIT(uint64_t, timestamp);
+#undef DOIT
+    
+    counter_names.define(con);
+    counter_events.define(con);
+  }
+  
+  void import(const nlohmann::json &rec){
+    int pid = rec["pid"].template get<int>();
+    std::string event_id = getUniqueID(rec["event_id"],pid);
+
+    auto const &cs = rec["counter_events"];
+    
+    for(size_t i=0;i<cs.size();i++){
+      std::string counter_name = cs[i]["counter_name"].template get<std::string>();
+      bool first;
+      uint64_t counter_idx = lookupCounterIndex(counter_name, &first);
+
+      if(first){ //add to map
+	int r = counter_names.addRow();
+	counter_names(r,"counter_idx") = counter_idx;
+	counter_names(r,"counter_name") = counter_name;
+      }
+
+      int r = counter_events.addRow();
+      counter_events(r,"event_id") = event_id;
+      counter_events(r,"counter_idx") = counter_idx;
+      counter_events(r,"value") = cs[i]["counter_value"].template get<uint64_t>();
+      counter_events(r,"timestamp") = cs[i]["ts"].template get<uint64_t>();
+    }
+  }
+
+  void write(){
+    counter_names.write(con);
+    counter_events.write(con);
+  }
+  void clear(){
+    counter_names.clear();
+    counter_events.clear();
+  }
+};
 
 
 
@@ -421,6 +500,7 @@ struct provDBtables{
   DOIT(CallStackTables, call_stack) \
   DOIT(ExecWindowTables, exec_window) \
   DOIT(IOstepTable, io_steps) \
+  DOIT(CounterEventsTables, counter_events) \
   DOIT(GPUanomaliesTable, gpu_anomalies) \
   LAST(NodeStateTable, node_state)
 
