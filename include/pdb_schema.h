@@ -492,6 +492,80 @@ public:
 };
 
 
+class CommWindowTables{
+  Table comm_windows;
+  
+  duckdb_connection &con;
+
+                // {
+                //     "bytes": 8,
+                //     "execdata_key": "0:0:2888",
+                //     "pid": 0,
+                //     "rid": 0,
+                //     "src": 0,
+                //     "tag": 0,
+                //     "tar": 1,
+                //     "tid": 0,
+                //     "timestamp": 1745598464682394,
+                //     "type": "SEND"
+                // },
+  
+#define COMM_WINDOW_EVENTS_ENTRIES \
+      DOIT_EID(std::string,event_id); \
+      DOIT2(std::string, parent_event_id, execdata_key); \
+      DOIT(uint64_t, bytes);				 \
+      DOIT(uint64_t, tag);				 \
+      DOIT(uint64_t, src);				 \
+      DOIT2(uint64_t, dest, tar);			 \
+      DOIT(uint64_t, tid);				 \
+      DOIT(uint64_t, timestamp);			 \
+      DOIT(std::string, type);
+
+
+public:
+  CommWindowTables(duckdb_connection &con): comm_windows("comm_windows"), con(con){
+#define DOIT(T,NM) comm_windows.addColumn<T>(#NM)
+#define DOIT2(T,NM,NM2) DOIT(T,NM)
+#define DOIT_EID(T,NM) DOIT(T,NM)
+    
+    COMM_WINDOW_EVENTS_ENTRIES;
+#undef DOIT
+#undef DOIT2
+#undef DOIT_EID
+    
+    comm_windows.define(con);
+  }
+  
+  void import(const nlohmann::json &rec){
+    static std::unordered_set<std::string> eid_names({  "execdata_key" });
+    
+    auto const &cs = rec["event_window"]["comm_window"];
+    int pid = rec["pid"].template get<int>();
+    std::string event_id = getUniqueID(rec["event_id"],pid);
+    
+    for(size_t i=0;i<cs.size();i++){
+      int r = comm_windows.addRow();
+      comm_windows(r,"event_id") = event_id;
+      
+#define DOIT(T,NM) comm_windows(r,#NM) = cs[i][#NM].template get<T>()
+#define DOIT2(T,NM,NM2) comm_windows(r,#NM) = process<T>(cs[i],#NM2,pid,eid_names)
+#define DOIT_EID(T,NM)
+      
+      COMM_WINDOW_EVENTS_ENTRIES;
+#undef DOIT
+#undef DOIT2
+#undef DOIT_EID
+    }
+  }
+
+  void write(){
+    comm_windows.write(con);
+  }
+  void clear(){
+    comm_windows.clear();
+  }
+};
+
 
 
 struct provDBtables{
@@ -499,6 +573,7 @@ struct provDBtables{
   DOIT(AnomaliesTable, anomalies) \
   DOIT(CallStackTables, call_stack) \
   DOIT(ExecWindowTables, exec_window) \
+  DOIT(CommWindowTables, comm_window) \
   DOIT(IOstepTable, io_steps) \
   DOIT(CounterEventsTables, counter_events) \
   DOIT(GPUanomaliesTable, gpu_anomalies) \
