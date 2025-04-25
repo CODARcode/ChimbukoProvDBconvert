@@ -30,14 +30,15 @@ public:
   }
 
   //Get the layer from where the runstats data can be extracted
-  virtual const nlohmann::json & getDataLayer(const nlohmann::json &rec) const =  0;
+  virtual nlohmann::json const* getDataLayer(const nlohmann::json &rec) const =  0;
   
   void import(const nlohmann::json &rec){
-    const nlohmann::json &data = this->getDataLayer(rec);
-    
+    nlohmann::json const *data_p = this->getDataLayer(rec);
+    if(data_p == nullptr) return;
+
     int r = tab.addRow();
 #define DOIT_KEY(T,NM) { T v = rec[#NM]; tab(r,#NM) = v; }
-#define DOIT(T,NM) { T v = data[#NM]; tab(r,#NM) = v; }
+#define DOIT(T,NM) { T v = (*data_p)[#NM]; tab(r,#NM) = v; }
     RUN_STATS_ENTRIES;
 #undef DOIT
 #undef DOIT_KEY
@@ -54,36 +55,39 @@ public:
 class FuncAnomalyCountStats: public RunStatsTable{
 public:
   FuncAnomalyCountStats(duckdb_connection &con): RunStatsTable(con, "func_anomaly_count_stats"){}
-  const nlohmann::json & getDataLayer(const nlohmann::json &rec) const override{
-    return rec["anomaly_metrics"]["anomaly_count"];
+  nlohmann::json const* getDataLayer(const nlohmann::json &rec) const override{
+    if(rec["anomaly_metrics"].is_null()) return nullptr;
+    else return &rec["anomaly_metrics"]["anomaly_count"];
   }
 };
 class FuncAnomalyScoreStats: public RunStatsTable{
 public:
   FuncAnomalyScoreStats(duckdb_connection &con): RunStatsTable(con, "func_anomaly_score_stats"){}
-  const nlohmann::json & getDataLayer(const nlohmann::json &rec) const override{
-    return rec["anomaly_metrics"]["score"];
+  nlohmann::json const* getDataLayer(const nlohmann::json &rec) const override{
+    if(rec["anomaly_metrics"].is_null()) return nullptr;
+    else return &rec["anomaly_metrics"]["score"];
   }
 };
 class FuncAnomalySeverityStats: public RunStatsTable{
 public:
   FuncAnomalySeverityStats(duckdb_connection &con): RunStatsTable(con, "func_anomaly_severity_stats"){}
-  const nlohmann::json & getDataLayer(const nlohmann::json &rec) const override{
-    return rec["anomaly_metrics"]["severity"];
+  nlohmann::json const* getDataLayer(const nlohmann::json &rec) const override{
+    if(rec["anomaly_metrics"].is_null()) return nullptr;
+    else return &rec["anomaly_metrics"]["severity"];
   }
 };
 class FuncRuntimeProfileInclusiveStats: public RunStatsTable{
 public:
   FuncRuntimeProfileInclusiveStats(duckdb_connection &con): RunStatsTable(con, "func_runtime_profile_inclusive_stats"){}
-  const nlohmann::json & getDataLayer(const nlohmann::json &rec) const override{
-    return rec["runtime_profile"]["inclusive_runtime"];
+  nlohmann::json const* getDataLayer(const nlohmann::json &rec) const override{
+    return &rec["runtime_profile"]["inclusive_runtime"];
   }
 };
 class FuncRuntimeProfileExclusiveStats: public RunStatsTable{
 public:
   FuncRuntimeProfileExclusiveStats(duckdb_connection &con): RunStatsTable(con, "func_runtime_profile_exclusive_stats"){}
-  const nlohmann::json & getDataLayer(const nlohmann::json &rec) const override{
-    return rec["runtime_profile"]["exclusive_runtime"];
+  nlohmann::json const* getDataLayer(const nlohmann::json &rec) const override{
+    return &rec["runtime_profile"]["exclusive_runtime"];
   }
 };  
 
