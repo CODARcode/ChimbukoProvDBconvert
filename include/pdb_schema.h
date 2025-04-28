@@ -50,7 +50,7 @@ uint64_t lookupCounterIndex(const std::string &cname, bool *first = nullptr){
 }
   
 
-class AnomaliesTable{
+class EventRecordsTable{
   duckdb_connection &con;
   Table tab;
 
@@ -69,7 +69,7 @@ class AnomaliesTable{
     DOIT(bool, is_gpu_event); 
   
 public:
-  AnomaliesTable(duckdb_connection &con): tab("anomalies"), con(con){
+  EventRecordsTable(duckdb_connection &con, const std::string &table_name): tab(table_name), con(con){
 #define DOIT(T,NM) tab.addColumn<T>(#NM)
 #define DOIT2(T,NM,NM2) DOIT(T,NM)   
     ENTRIES;
@@ -96,6 +96,15 @@ public:
     tab.clear();
   }
 };
+class AnomaliesTable: public EventRecordsTable{
+  public:
+  AnomaliesTable(duckdb_connection &con): EventRecordsTable(con, "anomalies"){}
+};
+class NormalExecsTable: public EventRecordsTable{
+  public:
+  NormalExecsTable(duckdb_connection &con): EventRecordsTable(con, "normal_execs"){}
+};    
+
 
 class CallStackTables{
   Table call_stack_events; //events that appear in call stacks
@@ -295,10 +304,10 @@ public:
 };
 
 
-class GPUanomaliesTable{
+class GPUeventsTable{
   duckdb_connection &con;
   Table gpu_parents;
-  Table gpu_anomalies;
+  Table gpu_events;
 
   std::unordered_set<std::string> gpu_parents_keys;
 
@@ -308,7 +317,7 @@ class GPUanomaliesTable{
   DOIT(std::string, event_id); \
   DOIT(int, tid);
   
-#define GPU_ANOMALIES_ENTRIES \
+#define GPU_EVENTS_ENTRIES \
     DOIT(std::string, event_id); \
     DOIT_LOC(int, context); \
     DOIT_LOC(int, device); \
@@ -316,7 +325,7 @@ class GPUanomaliesTable{
     DOIT_SPECIAL(std::string, gpu_parent_event_id);
     
 public:
-  GPUanomaliesTable(duckdb_connection &con): gpu_anomalies("gpu_anomalies"), gpu_parents("gpu_parents"), con(con), call_stacks(nullptr){
+  GPUeventsTable(duckdb_connection &con): gpu_events("gpu_events"), gpu_parents("gpu_parents"), con(con), call_stacks(nullptr){
 #define DOIT(T,NM) tab.addColumn<T>(#NM)
 #define DOIT_SPECIAL(T,NM) DOIT(T,NM)
 #define DOIT_LOC(T,NM) DOIT(T,NM)
@@ -325,15 +334,15 @@ public:
       GPU_PARENTS_ENTRIES;
     }
     {
-      auto &tab = gpu_anomalies;
-      GPU_ANOMALIES_ENTRIES;
+      auto &tab = gpu_events;
+      GPU_EVENTS_ENTRIES;
     }
 #undef DOIT
 #undef DOIT_SPECIAL
 #undef DOIT_LOC
     
     gpu_parents.define(con);
-    gpu_anomalies.define(con);
+    gpu_events.define(con);
   }
 
   void linkCallStacksTable(CallStackTables* call_stacks_){
@@ -345,11 +354,11 @@ public:
       int pid = rec["pid"].template get<int>();
       
       const nlohmann::json &gpu_loc = rec["gpu_location"];	
-      int r = gpu_anomalies.addRow();
-#define DOIT(T,NM) gpu_anomalies(r,#NM) = process<T>(rec,#NM,pid); 
-#define DOIT_LOC(T,NM) gpu_anomalies(r,#NM) = gpu_loc[#NM].template get<T>(); 
+      int r = gpu_events.addRow();
+#define DOIT(T,NM) gpu_events(r,#NM) = process<T>(rec,#NM,pid); 
+#define DOIT_LOC(T,NM) gpu_events(r,#NM) = gpu_loc[#NM].template get<T>(); 
 #define DOIT_SPECIAL(T,NM)
-	GPU_ANOMALIES_ENTRIES;
+	GPU_EVENTS_ENTRIES;
 #undef DOIT
 #undef DOIT_LOC
 #undef DOIT_SPECIAL
@@ -359,7 +368,7 @@ public:
 
 	std::string parent_eid = getUniqueID(parent_info["event_id"].template get<std::string>(), pid);
 	
-	gpu_anomalies(r,"gpu_parent_event_id") = parent_eid;
+	gpu_events(r,"gpu_parent_event_id") = parent_eid;
 
 	//Only add a gpu_parent to the table if it has not been seen before
 	auto ck = gpu_parents_keys.insert(parent_eid);
@@ -373,18 +382,18 @@ public:
 	  call_stacks->import(parent_info, pid);
 	}
       }else{
-	gpu_anomalies(r,"gpu_parent_event_id") = rec["gpu_parent"].template get<std::string>(); //store whatever the error string was
+	gpu_events(r,"gpu_parent_event_id") = rec["gpu_parent"].template get<std::string>(); //store whatever the error string was
       }
     }   
   }
 
   void write(){
     gpu_parents.write(con);
-    gpu_anomalies.write(con);
+    gpu_events.write(con);
   }
   void clear(){
     gpu_parents.clear();
-    gpu_anomalies.clear();
+    gpu_events.clear();
   }
 };
 
@@ -569,34 +578,47 @@ public:
 
 
 struct provDBtables{
-#define TABLES	 \
-  DOIT(AnomaliesTable, anomalies) \
+#define SHARED_TABLES \
   DOIT(CallStackTables, call_stack) \
   DOIT(ExecWindowTables, exec_window) \
   DOIT(CommWindowTables, comm_window) \
   DOIT(IOstepTable, io_steps) \
   DOIT(CounterEventsTables, counter_events) \
-  DOIT(GPUanomaliesTable, gpu_anomalies) \
+  DOIT(GPUeventsTable, gpu_events) \
   LAST(NodeStateTable, node_state)
 
+#define ANOM_TABLE  DOIT(AnomaliesTable, anomalies)
+#define NORMAL_TABLE  DOIT(NormalExecsTable, normal_execs)
+
+#define ANOM_REC_TABLES ANOM_TABLE SHARED_TABLES
+#define NORMAL_REC_TABLES NORMAL_TABLE SHARED_TABLES
+#define ALL_TABLES ANOM_TABLE NORMAL_TABLE SHARED_TABLES
+  
 #define DOIT(T,NM) T NM;
 #define LAST(T,NM) DOIT(T, NM)
-  TABLES
+  ALL_TABLES
 #undef DOIT
 #undef LAST  
 
 #define DOIT(T, NM) NM(con),
 #define LAST(T, NM) NM(con)  
-  provDBtables(duckdb_connection &con): TABLES{
-      gpu_anomalies.linkCallStacksTable(&call_stack);
+  provDBtables(duckdb_connection &con): ALL_TABLES{
+      gpu_events.linkCallStacksTable(&call_stack);
   }
 #undef DOIT
 #undef LAST
 					
-  void import(const nlohmann::json &rec){
+  void importAnomaly(const nlohmann::json &rec){
 #define DOIT(T,NM) NM.import(rec);
 #define LAST(T,NM) DOIT(T, NM)
-    TABLES
+    ANOM_REC_TABLES
+#undef DOIT
+#undef LAST  
+  }
+  void importNormalExec(const nlohmann::json &rec){
+#define DOIT(T,NM) NM.import(rec);
+#define LAST(T,NM) DOIT(T, NM)
+    NORMAL_REC_TABLES
 #undef DOIT
 #undef LAST  
   }
@@ -604,18 +626,20 @@ struct provDBtables{
   void write(){
 #define DOIT(T,NM) NM.write();
 #define LAST(T,NM) DOIT(T, NM)
-    TABLES
+    ALL_TABLES
 #undef DOIT
 #undef LAST  
   }
   void clear(){
 #define DOIT(T,NM) NM.clear();
 #define LAST(T,NM) DOIT(T, NM)
-    TABLES
+    ALL_TABLES
 #undef DOIT
 #undef LAST  
   }
-#undef TABLES
+#undef ALL_TABLES
+#undef SHARED_TABLES
+#undef ANOM_TABLE
+#undef NORMAL_TABLE
 };
-
 

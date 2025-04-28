@@ -156,6 +156,28 @@ std::unordered_set<uint64_t> splitRecordIds(const std::string& str) {
   return recs;
 }
 
+//Wrappers to map general "import" function to appropriate call for shared main table
+template<typename Into>
+struct ImportAnomaliesWrapper{
+  Into &tables;
+
+  ImportAnomaliesWrapper(Into &tables): tables(tables){}
+  
+  inline void import(const nlohmann::json &rec){
+    tables.importAnomaly(rec);
+  }
+};
+template<typename Into>
+struct ImportNormalExecsWrapper{
+  Into &tables;
+
+  ImportNormalExecsWrapper(Into &tables): tables(tables){}
+  
+  inline void import(const nlohmann::json &rec){
+    tables.importNormalExec(rec);
+  }
+};  
+
 int main(int argc, char **argv){
   if(argc < 3){
     std::cout << "Usage: <binary> <provdb_dir> <outfile> <options>" << std::endl
@@ -163,6 +185,7 @@ int main(int argc, char **argv){
 	      << "-nshards <num> : Set the number of shards" <<std::endl
 	      << "-nrecord_max <num> : Cap on how many records to import per collection (over all shards in the case of the main DB)." << std::endl
 	      << "-specific_records_anom <shard> <idx1.idx2.idx3>: In this shard, parse only specific records from the \"anomalies\" collection. Indices should be in the form $shard#$idx (eg 1:32) separated by a period (.). This overrides -nrecord_max for this shard but still counts towards it." << std::endl
+      	      << "-specific_records_normal <shard> <idx1.idx2.idx3>: In this shard, parse only specific records from the \"normalexecs\" collection. cf. above." << std::endl
       	      << "-specific_records_funcstats <idx.idx2.idx3....>: As above but for the \"func_stats\" collection of the global database." << std::endl;
       
     return 0;
@@ -177,6 +200,7 @@ int main(int argc, char **argv){
   bool nrecord_max_set = false;
   
   std::map<int,  std::unordered_set<uint64_t> > anom_recs;
+  std::map<int,  std::unordered_set<uint64_t> > normal_recs;  
   std::unordered_set<uint64_t> funcstats_recs;
   bool spec_funcstats_recs=false;
   
@@ -193,6 +217,11 @@ int main(int argc, char **argv){
       int shard;
       std::stringstream ss; ss << argv[arg+1]; ss >> shard;      
       anom_recs[shard] = splitRecordIds(argv[arg+2]);
+      arg+=3;
+    }else if(sarg == "-specific_records_normal"){
+      int shard;
+      std::stringstream ss; ss << argv[arg+1]; ss >> shard;      
+      normal_recs[shard] = splitRecordIds(argv[arg+2]);
       arg+=3;
     }else if(sarg == "-specific_records_funcstats"){
       funcstats_recs = splitRecordIds(argv[arg+1]);
@@ -260,11 +289,32 @@ int main(int argc, char **argv){
     std::cout << "Parsing anomalies from shard " << s << std::endl;
     auto sit = anom_recs.find(s);
 
+    ImportAnomaliesWrapper<provDBtables> wrp(tables);
+      
     size_t parsed;
     if(sit != anom_recs.end()){
-      parsed = parseSpecificRecords(tables, *databases[s], "anomalies", sit->second);
+      parsed = parseSpecificRecords(wrp, *databases[s], "anomalies", sit->second);
     }else{      
-      parsed = parseCollection(tables, *databases[s], "anomalies", nrecord_max_set ? &nrecord_max_anom: nullptr);
+      parsed = parseCollection(wrp, *databases[s], "anomalies", nrecord_max_set ? &nrecord_max_anom: nullptr);
+    }
+    std::cout << "Parsed " << parsed << " records from shard " << s << std::endl;
+    if(nrecord_max_set) nrecord_max_anom -= parsed;
+  }
+
+  //parse "normalexecs"
+  nrecord_max_anom = nrecord_max;
+  
+  for(int s=0;s<nshards;s++){
+    std::cout << "Parsing normal execs from shard " << s << std::endl;
+    auto sit = normal_recs.find(s);
+
+    ImportNormalExecsWrapper<provDBtables> wrp(tables);
+    
+    size_t parsed;
+    if(sit != normal_recs.end()){
+      parsed = parseSpecificRecords(wrp, *databases[s], "normalexecs", sit->second);
+    }else{      
+      parsed = parseCollection(wrp, *databases[s], "normalexecs", nrecord_max_set ? &nrecord_max_anom: nullptr);
     }
     std::cout << "Parsed " << parsed << " records from shard " << s << std::endl;
     if(nrecord_max_set) nrecord_max_anom -= parsed;
