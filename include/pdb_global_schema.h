@@ -127,53 +127,147 @@ public:
   }
 };
 
+class ADmodelTable{
+  Table tab;
+  duckdb_connection &con;
+
+  bool is_setup;
+  bool is_hbos_copod;
+  
+public:
+  ADmodelTable(duckdb_connection &con): tab("ad_models"), con(con), is_setup(false){  }
+
+  static std::vector<uint64_t> getIntVector(const nlohmann::json &v){
+    assert(v.is_array());
+    std::vector<uint64_t> out(v.size());
+    for(size_t i=0;i<v.size();i++)
+      out[i] = v[i].template get<uint64_t>();
+    return out;
+  }
+  
+  void import(const nlohmann::json &rec){
+    int fid = rec["fid"].template get<int>();
+    const nlohmann::json &model = rec["model"];
+    if(!is_setup){
+      if(model.contains("histogram")){
+	is_hbos_copod = true;
+
+	tab.addColumn<int>("fid");
+	tab.addColumn<double>("bin_width");
+	tab.addColumn<double>("first_edge");
+	tab.addColumn<uint64_t>("min");
+	tab.addColumn<uint64_t>("max");
+	tab.addColumn<std::vector<uint64_t> >("bin_counts");
+	tab.addColumn<double>("internal_global_threshold");
+	tab.define(con);
+	
+	std::cout << "Identified models are HBOS/COPOD" << std::endl;
+      }else{
+	throw std::runtime_error("Only HBOS/COPOD are currently implemented");
+      }
+      is_setup = true;
+    }
+    
+    int r = tab.addRow();
+    tab(r, "fid") = fid;
+
+    if(is_hbos_copod){
+      const nlohmann::json &hist = model["histogram"];
+
+      tab(r, "bin_width") = hist["Bin width"].template get<double>();
+      tab(r, "first_edge") = hist["First edge"].template get<double>();
+      tab(r, "min") = hist["Min"].template get<uint64_t>();
+      tab(r, "max") = hist["Max"].template get<uint64_t>();
+      tab(r, "bin_counts") = getIntVector(model["histogram"]["Bin Counts"]);
+      tab(r, "internal_global_threshold") = model["internal_global_threshold"].template get<double>();
+    }else{
+      assert(0);
+    }
+      
+  }
+
+  void write(){
+    tab.write(con);
+  }
+  void clear(){
+    tab.clear();
+  }
+};
+  
 
 
 struct provDBglobalFuncStatsTables{
-  #define TABLES \
-    DOIT(FunctionTable, functions) \
-    DOIT(FuncRuntimeProfileInclusiveStats, func_runtime_profile_inclusive_stats) \
-    DOIT(FuncRuntimeProfileExclusiveStats, func_runtime_profile_exclusive_stats) \
-    DOIT(FuncAnomalyCountStats, func_anomaly_count_stats) \
-    DOIT(FuncAnomalyScoreStats, func_anomaly_score_stats) \
-    LAST(FuncAnomalySeverityStats, func_anomaly_severity_stats) \
-
+#define TABLES	   \
+  DOIT(FunctionTable, functions)					\
+  DOIT(FuncRuntimeProfileInclusiveStats, func_runtime_profile_inclusive_stats) \
+  DOIT(FuncRuntimeProfileExclusiveStats, func_runtime_profile_exclusive_stats) \
+  DOIT(FuncAnomalyCountStats, func_anomaly_count_stats)			\
+  DOIT(FuncAnomalyScoreStats, func_anomaly_score_stats)			\
+  DOIT(FuncAnomalySeverityStats, func_anomaly_severity_stats)
+   
 #define DOIT(T,NM) T NM;
-#define LAST(T,NM) DOIT(T, NM)
   TABLES
 #undef DOIT
-#undef LAST  
-
   
+  bool dummy;
+    
 #define DOIT(T, NM) NM(con),
-#define LAST(T, NM) NM(con)  
-  provDBglobalFuncStatsTables(duckdb_connection &con): TABLES {  }
+  provDBglobalFuncStatsTables(duckdb_connection &con): TABLES dummy(false) {  }
 #undef DOIT
-#undef LAST  
 
 						       
   void import(const nlohmann::json &rec){
 #define DOIT(T,NM) NM.import(rec);
-#define LAST(T,NM) DOIT(T, NM)
     TABLES
 #undef DOIT
-#undef LAST  
   }
   
   void write(){
 #define DOIT(T,NM) NM.write();
-#define LAST(T,NM) DOIT(T, NM)
     TABLES
 #undef DOIT
-#undef LAST  
   }
   void clear(){
 #define DOIT(T,NM) NM.clear();
-#define LAST(T,NM) DOIT(T, NM)
     TABLES
 #undef DOIT
-#undef LAST  
   }
 
 #undef TABLES
 };
+
+struct provDBglobalADmodelTables{
+#define TABLES	   \
+  DOIT(ADmodelTable, ad_models)
+   
+#define DOIT(T,NM) T NM;
+  TABLES
+#undef DOIT
+  
+  bool dummy;
+    
+#define DOIT(T, NM) NM(con),
+  provDBglobalADmodelTables(duckdb_connection &con): TABLES dummy(false) {  }
+#undef DOIT
+						       
+  void import(const nlohmann::json &rec){
+#define DOIT(T,NM) NM.import(rec);
+    TABLES
+#undef DOIT
+  }
+  
+  void write(){
+#define DOIT(T,NM) NM.write();
+    TABLES
+#undef DOIT
+  }
+  void clear(){
+#define DOIT(T,NM) NM.clear();
+    TABLES
+#undef DOIT
+  }
+
+#undef TABLES
+};
+
+

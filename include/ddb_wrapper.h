@@ -10,6 +10,8 @@
 #include <sstream>
 #include <string>
 #include <chrono>
+#include <cstring>
+
 class Timer{
   typedef std::chrono::high_resolution_clock Clock;
   typedef std::chrono::milliseconds MilliSec;
@@ -61,8 +63,6 @@ double Timer::elapsed_ms() const{
   return elapsed_us()/1000.;
 }
 
-
-
 template<typename T>
 struct _valueWriter{};
 
@@ -70,40 +70,57 @@ template<>
 struct _valueWriter<int>{
   static inline void write(duckdb_appender appender, int v){ duckdb_append_int32(appender, v); }
   static inline std::string typeString(){ return "INTEGER"; }
+  static inline duckdb_type type(){ return DUCKDB_TYPE_INTEGER; }
+  static inline duckdb_value asValue(int v){ return duckdb_create_int32(v); }
 };
 
 template<>
 struct _valueWriter<uint64_t>{
   static inline void write(duckdb_appender appender, uint64_t v){ duckdb_append_uint64(appender, v); }
   static inline std::string typeString(){ return "UBIGINT"; }
+  static inline duckdb_type type(){ return DUCKDB_TYPE_UBIGINT; }
+  static inline duckdb_value asValue(uint64_t v){ return duckdb_create_uint64(v); }
 };
 
 template<>
 struct _valueWriter<int64_t>{
   static inline void write(duckdb_appender appender, int64_t v){ duckdb_append_int64(appender, v); }
   static inline std::string typeString(){ return "BIGINT"; }
+  static inline duckdb_type type(){ return DUCKDB_TYPE_BIGINT; }
+  static inline duckdb_value asValue(int64_t v){ return duckdb_create_int64(v); }
 };
-
 
 template<>
 struct _valueWriter<double>{
   static inline void write(duckdb_appender appender, double v){ duckdb_append_double(appender, v); }
   static inline std::string typeString(){ return "DOUBLE"; }
+  static inline duckdb_type type(){ return DUCKDB_TYPE_DOUBLE; }
+  static inline duckdb_value asValue(double v){ return duckdb_create_double(v); }
 };
 
 template<>
 struct _valueWriter<std::string>{
   static inline void write(duckdb_appender appender, const std::string &v){ duckdb_append_varchar(appender, v.c_str()); }
   static inline std::string typeString(){ return "VARCHAR"; }
+  static inline duckdb_type type(){ return DUCKDB_TYPE_VARCHAR; }
+  static inline duckdb_value asValue(const std::string & v){ assert(0); }
 };
 
 template<>
 struct _valueWriter<bool>{
   static inline void write(duckdb_appender appender, bool v){ duckdb_append_bool(appender, v); }
   static inline std::string typeString(){ return "BOOLEAN"; }
+  static inline duckdb_type type(){ return DUCKDB_TYPE_BOOLEAN; }
+  static inline duckdb_value asValue(bool v){ return duckdb_create_bool(v); }
+};
+template<typename T>
+struct _valueWriter<std::vector<T> >{
+  static inline std::string typeString(){ return "array type"; }
 };
 
 
+
+  
 template<typename T>
 struct _valueReader{
   static inline char* read(T &into, char* vdata){
@@ -176,6 +193,48 @@ struct valueContainer: public valueContainerBase{
   
 };
 
+
+template<typename T>
+struct valueContainer<std::vector<T> >: public valueContainerBase{
+  std::vector<T> v;
+  valueContainer(const std::vector<T> &v): v(v){}
+  valueContainer(){}
+  
+  void write(duckdb_appender appender) const override{
+    duckdb_logical_type lti = duckdb_create_logical_type(_valueWriter<T>::type());
+
+    std::vector<duckdb_value> values(v.size());
+    for(size_t i=0;i<v.size();i++)
+      values[i] = _valueWriter<T>::asValue(v[i]);
+        
+    duckdb_value aval = duckdb_create_list_value(lti, values.data(), v.size());
+    duckdb_append_value(appender, aval);
+
+    duckdb_destroy_value(&aval);
+    for(auto &e : values)
+      duckdb_destroy_value(&e);
+            
+    duckdb_destroy_logical_type(&lti);    
+  }
+  void write(std::ostream &os) const{
+    os << "[";
+    for(auto const &e : v) os << e << " ";
+    os << "]";
+  }
+  char* read(char *vdata) override{
+    throw std::runtime_error("vector read not yet implemented");
+  }    
+  
+  valueContainerBase* deepCopy() const override{ return new valueContainer(v); }
+  
+  std::string typeString() const override{
+    std::ostringstream os; os << _valueWriter<T>::typeString() << "[]";
+    return os.str();
+  }  
+  
+};
+
+
 struct value{
   std::unique_ptr<valueContainerBase> _p;
 
@@ -240,6 +299,8 @@ public:
       this->addColumn<uint64_t>(name); break;
     case DUCKDB_TYPE_BIGINT:
       this->addColumn<int64_t>(name); break;
+    case DUCKDB_TYPE_BOOLEAN:
+      this->addColumn<bool>(name); break;      
     default:
       throw std::runtime_error("Unknown duckdb_type of index "+std::to_string(type));
     }

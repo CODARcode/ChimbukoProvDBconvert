@@ -66,7 +66,8 @@ class EventRecordsTable{
     DOIT(uint64_t,runtime_exclusive); \
     DOIT(double,outlier_score); \
     DOIT(double,outlier_severity); \
-    DOIT(bool, is_gpu_event); 
+    DOIT(bool, is_gpu_event);
+
   
 public:
   EventRecordsTable(duckdb_connection &con, const std::string &table_name): tab(table_name), con(con){
@@ -75,7 +76,7 @@ public:
     ENTRIES;
 #undef DOIT
 #undef DOIT2
-    
+
     tab.define(con);
   }
     

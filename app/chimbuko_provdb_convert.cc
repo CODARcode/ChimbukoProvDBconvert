@@ -186,7 +186,8 @@ int main(int argc, char **argv){
 	      << "-nrecord_max <num> : Cap on how many records to import per collection (over all shards in the case of the main DB)." << std::endl
 	      << "-specific_records_anom <shard> <idx1.idx2.idx3>: In this shard, parse only specific records from the \"anomalies\" collection. Indices should be in the form $shard#$idx (eg 1:32) separated by a period (.). This overrides -nrecord_max for this shard but still counts towards it." << std::endl
       	      << "-specific_records_normal <shard> <idx1.idx2.idx3>: In this shard, parse only specific records from the \"normalexecs\" collection. cf. above." << std::endl
-      	      << "-specific_records_funcstats <idx.idx2.idx3....>: As above but for the \"func_stats\" collection of the global database." << std::endl;
+      	      << "-specific_records_funcstats <idx.idx2.idx3....>: As above but for the \"func_stats\" collection of the global database." << std::endl
+	      << "-specific_records_ad_model <idx.idx2.idx3....>: As above but for the \"ad_model\" collection of the global database." << std::endl;
       
     return 0;
   }
@@ -203,6 +204,10 @@ int main(int argc, char **argv){
   std::map<int,  std::unordered_set<uint64_t> > normal_recs;  
   std::unordered_set<uint64_t> funcstats_recs;
   bool spec_funcstats_recs=false;
+
+  std::unordered_set<uint64_t> model_recs;
+  bool spec_model_recs=false;
+  
   
   while(arg < argc){
     std::string sarg(argv[arg]);
@@ -226,7 +231,11 @@ int main(int argc, char **argv){
     }else if(sarg == "-specific_records_funcstats"){
       funcstats_recs = splitRecordIds(argv[arg+1]);
       spec_funcstats_recs = true;
-      arg+=2;      
+      arg+=2;
+    }else if(sarg == "-specific_records_ad_model"){
+      model_recs = splitRecordIds(argv[arg+1]);
+      spec_model_recs = true;
+      arg+=2;    
     }else{
       std::stringstream ss; ss << "Unknown argument: \"" << sarg << "\"";      
       throw std::runtime_error(ss.str());
@@ -271,7 +280,6 @@ int main(int argc, char **argv){
     admin.attachDatabase(addr,0, "provdb.global", "unqlite", config);
     glob_db.reset(new sonata::Database(client.open(addr, 0, "provdb.global")));
   }
-
 
   //Setup DuckDB
   duckdb_database db;
@@ -325,15 +333,28 @@ int main(int argc, char **argv){
   std::cout << "Parsing func_stats from global database" << std::endl;
   if(spec_funcstats_recs){
     size_t parsed = parseSpecificRecords(glob_tables, *glob_db, "func_stats", funcstats_recs);
-    std::cout << "Parsed " << parsed << " records from global database" << std::endl;
+    std::cout << "Parsed " << parsed << " records from func_stats collection of global database" << std::endl;
   }else{
     size_t parsed = parseCollection(glob_tables, *glob_db, "func_stats", nrecord_max_set ? &nrecord_max : nullptr);
-    std::cout << "Parsed " << parsed << " records from global database" << std::endl;
+    std::cout << "Parsed " << parsed << " records from func_stats collection of global database" << std::endl;
   }
 
+  provDBglobalADmodelTables model_tables(con);
+  std::cout << "Parsing ad_model from global database" << std::endl;
+  if(spec_model_recs){
+    size_t parsed = parseSpecificRecords(model_tables, *glob_db, "ad_model", model_recs);
+    std::cout << "Parsed " << parsed << " records from ad_model collection of global database" << std::endl;
+  }else{
+    size_t parsed = parseCollection(model_tables, *glob_db, "ad_model", nrecord_max_set ? &nrecord_max : nullptr);
+    std::cout << "Parsed " << parsed << " records from ad_model collection of global database" << std::endl;
+  }
+  
   tables.write();
   glob_tables.write();
+  model_tables.write();
+  
   duckdb_disconnect(&con);
   duckdb_close(&db);
+
   return 0;
 }
