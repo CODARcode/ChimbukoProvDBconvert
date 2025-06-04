@@ -113,6 +113,7 @@ class NormalExecsTable: public EventRecordsTable{
 class CallStackTables{
   Table call_stack_events; //events that appear in call stacks
   Table call_stacks; //map of anomaly event_id to one or more entries in call_stack_events
+  Table call_stack_labels; //one-to-one map of event_id to a label for a call stack built from the parent function indices, allowing a more fine-grained correlation of events other than just the function name
   std::unordered_set<std::string> call_stack_events_keys; //even if table is cleared when flushing to disk, we need to maintain a list of events in the call_stack_events table to ensure uniqueness
   
   duckdb_connection &con;
@@ -128,8 +129,13 @@ class CallStackTables{
   DOIT(std::string, event_id);			\
   DOIT(std::string, call_stack_entry_id);
 
+#define CALL_STACK_LABELS_ENTRIES \
+  DOIT(std::string, event_id);			\
+  DOIT(size_t, call_stack_label);
+  
+
 public:
-  CallStackTables(duckdb_connection &con): call_stacks("call_stacks"), call_stack_events("call_stack_events"), con(con){
+  CallStackTables(duckdb_connection &con): call_stacks("call_stacks"), call_stack_events("call_stack_events"), call_stack_labels("call_stack_labels"), con(con){
 #define DOIT(T,NM) call_stack_events.addColumn<T>(#NM)
     CALL_STACK_EVENTS_ENTRIES;
 #undef DOIT
@@ -137,9 +143,14 @@ public:
 #define DOIT(T,NM) call_stacks.addColumn<T>(#NM)
     CALL_STACKS_ENTRIES;
 #undef DOIT
+
+#define DOIT(T,NM) call_stack_labels.addColumn<T>(#NM)
+    CALL_STACK_LABELS_ENTRIES;
+#undef DOIT
     
     call_stacks.define(con);
     call_stack_events.define(con);
+    call_stack_labels.define(con);
   }
   
   //If pid = -1 infer from the record
@@ -149,16 +160,18 @@ public:
       pid = rec["pid"].template get<int>();
     
     std::string event_id = getUniqueID(rec["event_id"],pid);
-    
+
+    size_t cs_hash;
     for(size_t i=0;i<cs.size();i++){
       std::string cs_eid = getUniqueID(cs[i]["event_id"],pid);
 
+      //process call_stacks
       {
 	int r = call_stacks.addRow();
 	call_stacks(r,"event_id") = event_id;
 	call_stacks(r,"call_stack_entry_id") = cs_eid;
       }
-	
+      //process call_stack_events
       auto ck = call_stack_events_keys.insert(cs_eid);
       if(ck.second){ //key did not previously exist
 	int r = call_stack_events.addRow();
@@ -167,16 +180,28 @@ public:
 #undef DOIT
 	
       }
+      //process call_stack_labels
+      if(i==0) cs_hash = std::hash<int>{}(cs[i]["fid"]);
+      else cs_hash = cs_hash ^ std::hash<int>{}(cs[i]["fid"]);
+      
+    }
+
+    {
+      int r = call_stack_labels.addRow();
+      call_stack_labels(r,"event_id") = event_id;
+      call_stack_labels(r,"call_stack_label") = cs_hash;
     }
   }
 
   void write(){
     call_stacks.write(con);
     call_stack_events.write(con);
+    call_stack_labels.write(con);
   }
   void clear(){
     call_stacks.clear();
     call_stack_events.clear();
+    call_stack_labels.clear();
   }
 };
 
