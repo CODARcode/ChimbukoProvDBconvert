@@ -127,6 +127,7 @@ class CallStackTables{
   
 #define CALL_STACKS_ENTRIES \
   DOIT(std::string, event_id);			\
+  DOIT(int, entry_idx );			\
   DOIT(std::string, call_stack_entry_id);
 
 #define CALL_STACK_LABELS_ENTRIES \
@@ -169,6 +170,7 @@ public:
       {
 	int r = call_stacks.addRow();
 	call_stacks(r,"event_id") = event_id;
+	call_stacks(r,"entry_idx") = int(i);
 	call_stacks(r,"call_stack_entry_id") = cs_eid;
       }
       //process call_stack_events
