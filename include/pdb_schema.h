@@ -97,6 +97,9 @@ public:
     tab.clear();
   }
 };
+
+#undef ENTRIES
+
 class AnomaliesTable: public EventRecordsTable{
   public:
   AnomaliesTable(duckdb_connection &con): EventRecordsTable(con, "anomalies"){}
@@ -258,7 +261,7 @@ class IOstepTable{
   
   struct keyHash{ 
     size_t operator()(const keyType &x) const{ 
-      return std::get<0>(x) ^ std::get<1>(x) ^ std::get<2>(x); 
+      return std::hash<int>{}(std::get<0>(x)) ^ std::hash<int>{}(std::get<1>(x)) ^ std::hash<int>{}(std::get<2>(x)); 
     }
   };
   
@@ -577,6 +580,59 @@ public:
 };
 
 
+class RankNodeTable{
+  Table tab;
+
+  typedef std::pair<int,int> keyType;
+  
+  struct keyHash{ 
+    size_t operator()(const keyType &x) const{ 
+      return std::hash<int>{}(x.first) ^ std::hash<int>{}(x.second);
+    }
+  };
+  
+  std::unordered_set<keyType, keyHash> pid_rid_keys; 
+  
+  duckdb_connection &con;
+
+#define ENTRIES \
+      DOIT(int, pid); \
+      DOIT(int, rid); \
+      DOIT(std::string, hostname);
+
+public:
+  RankNodeTable(duckdb_connection &con): tab("rank_node_map"), con(con){
+#define DOIT(T,NM) tab.addColumn<T>(#NM)
+    ENTRIES;
+#undef DOIT
+   
+    tab.define(con);
+  }
+  
+  void import(const nlohmann::json &rec){
+    int pid = rec["pid"];
+    int rid = rec["rid"];
+    
+    auto ck = pid_rid_keys.insert(std::make_pair(pid,rid));
+    if(ck.second){
+      int r = tab.addRow();
+#define DOIT(T,NM) tab(r,#NM) = rec[#NM].template get<T>();
+      ENTRIES;
+#undef DOIT
+    }
+  }
+
+  void write(){
+    tab.write(con);
+  }
+  void clear(){
+    tab.clear();
+  }
+};
+
+#undef ENTRIES
+
+
 
 struct provDBtables{
 #define SHARED_TABLES \
@@ -586,7 +642,8 @@ struct provDBtables{
   DOIT(IOstepTable, io_steps) \
   DOIT(CounterEventsTables, counter_events) \
   DOIT(GPUeventsTable, gpu_events) \
-  LAST(NodeStateTable, node_state)
+  DOIT(RankNodeTable, node_rank_map) \
+  LAST(NodeStateTable, node_state) 
 
 #define ANOM_TABLE  DOIT(AnomaliesTable, anomalies)
 #define NORMAL_TABLE  DOIT(NormalExecsTable, normal_execs)
