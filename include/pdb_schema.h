@@ -48,7 +48,12 @@ uint64_t lookupCounterIndex(const std::string &cname, bool *first = nullptr){
   }
   return ret;
 }
-  
+
+template <class T>
+inline void hash_combine(std::size_t& seed, const T& v){
+  std::hash<T> hasher;
+  seed ^= hasher(v) + 0x9e3779b9 + (seed<<6) + (seed>>2);
+}
 
 class EventRecordsTable{
   duckdb_connection &con;
@@ -162,7 +167,7 @@ public:
     
     std::string event_id = getUniqueID(rec["event_id"],pid);
 
-    size_t cs_hash;
+    size_t cs_hash = 0;
     for(size_t i=0;i<cs.size();i++){
       std::string cs_eid = getUniqueID(cs[i]["event_id"],pid);
 
@@ -183,9 +188,7 @@ public:
 	
       }
       //process call_stack_labels
-      if(i==0) cs_hash = std::hash<int>{}(cs[i]["fid"]);
-      else cs_hash = cs_hash ^ std::hash<int>{}(cs[i]["fid"]);
-      
+      hash_combine(cs_hash, cs[i]["func"]);
     }
 
     {
@@ -287,8 +290,12 @@ class IOstepTable{
   typedef std::tuple<int,int,int> keyType;
   
   struct keyHash{ 
-    size_t operator()(const keyType &x) const{ 
-      return std::hash<int>{}(std::get<0>(x)) ^ std::hash<int>{}(std::get<1>(x)) ^ std::hash<int>{}(std::get<2>(x)); 
+    size_t operator()(const keyType &x) const{
+      size_t h=0;
+      hash_combine(h,std::get<0>(x));
+      hash_combine(h,std::get<1>(x));
+      hash_combine(h,std::get<2>(x));
+      return h;
     }
   };
   
@@ -613,8 +620,11 @@ class RankNodeTable{
   typedef std::pair<int,int> keyType;
   
   struct keyHash{ 
-    size_t operator()(const keyType &x) const{ 
-      return std::hash<int>{}(x.first) ^ std::hash<int>{}(x.second);
+    size_t operator()(const keyType &x) const{
+      size_t h=0;
+      hash_combine(h,x.first);
+      hash_combine(h,x.second);
+      return h;
     }
   };
   
